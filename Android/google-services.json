@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "60503745522",
+    "project_id": "gorun-dav",
+    "storage_bucket": "gorun-dav.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:60503745522:android:64fd15c1aa85e28f85416b",
+        "android_client_info": {
+          "package_name": "com.GoRun.app.dev"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDdeXSGjEEoiTkBZBmG3Akb9GNsDfCQmeY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

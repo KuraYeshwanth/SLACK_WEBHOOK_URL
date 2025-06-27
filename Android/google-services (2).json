@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "553723324766",
+    "project_id": "gorun-prod-dd1eb",
+    "storage_bucket": "gorun-prod-dd1eb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:553723324766:android:3eb6a9bd15986c732bc7cf",
+        "android_client_info": {
+          "package_name": "com.GoRun.app.prod"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQ15KLgBw41cqu54kwng_WA9IfH-afKzs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

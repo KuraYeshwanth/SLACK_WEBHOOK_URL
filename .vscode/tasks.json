@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "Flutter Test All",
+			"command": "flutter test",
+			"group": "test",
+			"problemMatcher": [
+				"$dart-flutter-test"
+			]
+		}
+	]
+}

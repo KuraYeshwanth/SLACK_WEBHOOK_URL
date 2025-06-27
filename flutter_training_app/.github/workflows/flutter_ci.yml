@@ -1,0 +1,320 @@
+name: Flutter CI
+
+on:
+  push:
+    branches: [ develop, staging, main, release ]
+  pull_request:
+    branches: [ develop, staging, main, release ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      apk-path: ${{ steps.build-apk.outputs.apk-path }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache Flutter dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: flutter-${{ runner.os }}-${{ hashFiles('**/pubspec.yaml') }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test --coverage
+
+      - name: Check code coverage threshold
+        run: |
+          sudo apt-get install -y lcov
+          COVERAGE=$(lcov --summary coverage/lcov.info | grep 'lines......:' | awk '{print $2}' | sed 's/%//')
+          echo "Detected coverage: $COVERAGE%"
+          
+          # Generate detailed coverage report
+          echo "## 📊 Code Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lines | $COVERAGE% |" >> $GITHUB_STEP_SUMMARY
+          
+          # Check threshold
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "❌ Coverage below threshold (80%)" >> $GITHUB_STEP_SUMMARY
+            echo "::error::Code coverage ($COVERAGE%) is below the required threshold (80%)"
+            exit 1
+          else
+            echo "✅ Coverage threshold met ($COVERAGE% ≥ 80%)" >> $GITHUB_STEP_SUMMARY
+            echo "::notice::Code coverage check passed: $COVERAGE%"
+          fi
+
+      - name: Comment coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+            
+            // Get coverage percentage
+            const coverage = execSync("lcov --summary coverage/lcov.info | grep 'lines......:' | awk '{print $2}' | sed 's/%//'", { encoding: 'utf-8' }).trim();
+            const threshold = 80;
+            const passed = parseFloat(coverage) >= threshold;
+            
+            const emoji = passed ? '✅' : '❌';
+            const status = passed ? 'PASSED' : 'FAILED';
+            const color = passed ? '🟢' : '🔴';
+            
+            const body = `## ${emoji} Code Coverage Report
+            
+            | Metric | Coverage | Status |
+            |--------|----------|--------|
+            | Lines | ${coverage}% | ${color} ${status} |
+            | Threshold | ${threshold}% | Required |
+            
+            ${passed ? 
+              '🎉 Great job! Your code coverage meets the required threshold.' : 
+              '⚠️ Code coverage is below the required threshold. Please add more tests.'
+            }`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.payload.pull_request.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+      - name: Build APK
+        id: build-apk
+        run: |
+          if [[ "${GITHUB_REF}" == "refs/heads/develop" ]]; then
+            flutter build apk --debug
+            echo "apk-path=build/app/outputs/flutter-apk/app-debug.apk" >> $GITHUB_OUTPUT
+          else
+            flutter build apk --release
+            echo "apk-path=build/app/outputs/flutter-apk/app-release.apk" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload APK Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ github.ref_name }}
+          path: ${{ steps.build-apk.outputs.apk-path }}
+
+      # Firebase Test Lab Integration
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCLOUD_PROJECT_ID }}
+          service_account_key: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          export_default_credentials: true
+
+      - name: Run integration tests on Firebase Test Lab
+        if: success()
+        continue-on-error: true
+        run: |
+          gcloud firebase test android run \
+            --type instrumentation \
+            --app ${{ steps.build-apk.outputs.apk-path }} \
+            --device model=Pixel2,version=29,locale=en,orientation=portrait \
+            --device model=Pixel4,version=30,locale=en,orientation=portrait \
+            --device model=Pixel6,version=31,locale=en,orientation=portrait \
+            --timeout 15m \
+            --results-bucket=gs://${{ secrets.FIREBASE_RESULTS_BUCKET }} \
+            --results-dir=github/${{ github.run_id }}
+
+      - name: Download and Zip Firebase Test Lab results
+        if: always()
+        run: |
+          gsutil -m cp -r gs://${{ secrets.FIREBASE_RESULTS_BUCKET }}/github/${{ github.run_id }} ./testlab_results || echo "No results to download"
+          zip -r testlab_results.zip ./testlab_results || echo "No results to zip"
+
+      - name: Upload Test Lab Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testlab-results
+          path: testlab_results.zip
+
+      - name: Comment on Deploy/Test Failure
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.payload.pull_request.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `❌ CI/CD failed during deploy or test. [View failed job](${context.payload.workflow_run.html_url})`
+            })
+
+  # Deploy to Firebase App Distribution (Dev)
+  deploy_firebase_dev:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    steps:
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk-develop
+          path: ./app
+
+      - name: Upload APK to Firebase App Distribution (Dev)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID_DEV }}
+        run: |
+          npm install -g firebase-tools
+          firebase appdistribution:distribute ./app/app-debug.apk \
+            --app $FIREBASE_APP_ID \
+            --groups "dev-testers" \
+            --token "$FIREBASE_TOKEN"
+
+  # Deploy to Firebase App Distribution (Staging)
+  deploy_firebase_staging:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/staging'
+    steps:
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk-staging
+          path: ./app
+
+      - name: Upload APK to Firebase App Distribution (Staging)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID_STAGING }}
+        run: |
+          npm install -g firebase-tools
+          firebase appdistribution:distribute ./app/app-release.apk \
+            --app $FIREBASE_APP_ID \
+            --groups "staging-testers" \
+            --token "$FIREBASE_TOKEN"
+
+  # Deploy to Firebase App Distribution (Prod) and Google Play Console (Internal)
+  deploy_prod:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release'
+    steps:
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk-main
+          path: ./app
+
+      - name: Upload APK to Firebase App Distribution (Prod)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID_PROD }}
+        run: |
+          npm install -g firebase-tools
+          firebase appdistribution:distribute ./app/app-release.apk \
+            --app $FIREBASE_APP_ID \
+            --groups "prod-testers" \
+            --token "$FIREBASE_TOKEN"
+
+      - name: Upload APK to Google Play Console (Internal)
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "$SERVICE_ACCOUNT_JSON" > /tmp/google-play-sa.json
+          curl -sL https://github.com/r0adkll/upload-google-play/releases/latest/download/upload-google-play-linux-amd64 -o upload-google-play
+          chmod +x upload-google-play
+          ./upload-google-play --package-name com.example.app --service-account /tmp/google-play-sa.json --track internal --apk build/app/outputs/flutter-apk/app-release.apk
+
+  # iOS Build and Deploy (TestFlight)
+  build_ios:
+    runs-on: macos-latest
+    outputs:
+      ipa-path: ${{ steps.build-ipa.outputs.ipa-path }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache Flutter dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+          key: flutter-${{ runner.os }}-${{ hashFiles('**/pubspec.yaml') }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS
+        id: build-ipa
+        run: |
+          if [[ "${GITHUB_REF}" == "refs/heads/develop" ]]; then
+            flutter build ios --debug --no-codesign
+            echo "ipa-path=build/ios/Debug-iphoneos/Runner.app" >> $GITHUB_OUTPUT
+          else
+            flutter build ios --release --no-codesign
+            echo "ipa-path=build/ios/Release-iphoneos/Runner.app" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload IPA Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-${{ github.ref_name }}
+          path: ${{ steps.build-ipa.outputs.ipa-path }}
+
+  deploy_ios:
+    needs: build_ios
+    runs-on: macos-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release'
+    steps:
+      - name: Download IPA Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-ipa-main
+          path: ./ios_build
+
+      - name: Upload IPA to TestFlight via Fastlane
+        env:
+          FASTLANE_SESSION: ${{ secrets.FASTLANE_SESSION }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+        run: |
+          cd ios
+          bundle install
+          bundle exec fastlane beta
+
+      - name: Comment on iOS Deploy Failure
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.payload.pull_request.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `❌ iOS deploy failed. [View failed job](${context.payload.workflow_run.html_url})`
+            })

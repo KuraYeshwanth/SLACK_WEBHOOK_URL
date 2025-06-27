@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "800021851980",
+    "project_id": "gorun-staging",
+    "storage_bucket": "gorun-staging.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:800021851980:android:86cddee0ad253445cc69e9",
+        "android_client_info": {
+          "package_name": "com.GoRun.app.staging"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA0MuMaCzpVfCGasDflQHokvr52MKjT1-c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
