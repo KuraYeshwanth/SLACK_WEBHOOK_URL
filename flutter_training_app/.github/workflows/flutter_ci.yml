@@ -1,5 +1,13 @@
 name: Flutter CI
 
+env:
+  FIREBASE_APP_ID_DEV: ${{ secrets.FIREBASE_APP_ID_DEV }}
+  FIREBASE_APP_ID_STAGING: ${{ secrets.FIREBASE_APP_ID_STAGING }}
+  FIREBASE_APP_ID_PROD: ${{ secrets.FIREBASE_APP_ID_PROD }}
+  FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+  GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
 on:
   push:
     branches: [ develop, staging, main, release ]
@@ -188,6 +196,15 @@ jobs:
             --groups "dev-testers" \
             --token "$FIREBASE_TOKEN"
 
+      - name: Send Slack notification (Dev)
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"✅ Dev deploy successful for ${{ github.ref }}"}' \
+            $SLACK_WEBHOOK_URL
+
   # Deploy to Firebase App Distribution (Staging)
   deploy_firebase_staging:
     needs: build
@@ -211,6 +228,15 @@ jobs:
             --groups "staging-testers" \
             --token "$FIREBASE_TOKEN"
 
+      - name: Send Slack notification (Staging)
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"✅ Staging deploy successful for ${{ github.ref }}"}' \
+            $SLACK_WEBHOOK_URL
+
   # Deploy to Firebase App Distribution (Prod) and Google Play Console (Internal)
   deploy_prod:
     needs: build
@@ -233,6 +259,15 @@ jobs:
             --app $FIREBASE_APP_ID \
             --groups "prod-testers" \
             --token "$FIREBASE_TOKEN"
+
+      - name: Send Slack notification (Prod)
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"✅ Prod deploy successful for ${{ github.ref }}"}' \
+            $SLACK_WEBHOOK_URL
 
       - name: Upload APK to Google Play Console (Internal)
         env:
